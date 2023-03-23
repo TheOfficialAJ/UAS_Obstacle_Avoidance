@@ -7,6 +7,5 @@ import numpy as np
 
 connectionString = 'tcp:localhost:5762'
 vehicle = connect(connectionString, wait_ready=True)
-
 vehicle.mode = 'RTL'
 vehicle.close()
