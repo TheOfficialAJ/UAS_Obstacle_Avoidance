@@ -153,18 +153,21 @@ def apfa_navigate(home, dest, safety_radius, *obstacles):
         vx_att = (K_ATT_X * rx) / dist_dest
         vy_att = (K_ATT_Y * ry) / dist_dest
 
+        vx_rep = 0
+        vy_rep = 0
+        rep_velocities = get_repulsive_velocities(currentLocation, np.array([rx, ry]), safety_radius, *obstacles)
+        print("Repulsive Velocities", rep_velocities)
+
         # If no obstacles nearby, then reset to max velocity
         if not rep_velocities:
             K_VELOCITY = K_VELOCITY_DEFAULT
 
         # If we are close to the waypoint, make velocities proportional to the distance (avoid overshoot)
-        if dist_dest < 100:
-            K_VELOCITY = dist_dest / 10
+        reduced_velocity = 1 + dist_dest/10
+        if dist_dest < 100 and K_VELOCITY > reduced_velocity:
+            K_VELOCITY = reduced_velocity
             print("CLOSE TO DESTINATION")
-        vx_rep = 0
-        vy_rep = 0
-        rep_velocities = get_repulsive_velocities(currentLocation, np.array([rx, ry]), safety_radius, *obstacles)
-        print("Repulsive Velocities", rep_velocities)
+
         for vel in rep_velocities:
             vx_rep += vel[0]
             vy_rep += vel[1]
