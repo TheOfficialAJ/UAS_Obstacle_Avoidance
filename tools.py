@@ -41,6 +41,15 @@ def get_distance_metres(aLocation1, aLocation2):
     return math.sqrt((dlat * dlat) + (dlong * dlong)) * 1.113195e5
 
 
+def get_3d_distance(aLocation1, aLocation2):  # Gives the 3d distance between two LocationRelativeGlobal objects
+    dlat = aLocation2.lat - aLocation1.lat
+    dlong = aLocation2.lon - aLocation1.lon
+    dalt = aLocation2.alt - aLocation1.alt
+    dist_2d = get_distance_metres(aLocation1, aLocation2)
+    dist_3d = math.sqrt((dist_2d ** 2) + (dalt ** 2))
+    return dist_3d
+
+
 def get_bearing(aLocation1, aLocation2):
     """
     Returns the bearing between the two LocationGlobal objects passed as parameters.
