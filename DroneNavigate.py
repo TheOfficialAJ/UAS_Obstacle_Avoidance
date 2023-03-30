@@ -7,6 +7,12 @@ from tools import *
 from pymavlink import mavutil
 import numpy as np
 
+
+class DroneNavigate:
+    def __init__(self):
+
+
+
 connectionString = '127.0.0.1:14550'
 vehicle = connect(connectionString, wait_ready=False)
 
@@ -209,31 +215,3 @@ def apfa_navigate(home, dest, safety_radius, *obstacles):
         sendVelocity(vx_tot, vy_tot, -vz_tot)
         # time.sleep(0.1)
 
-
-try:
-    takeoff_alt = 10.0
-    arm_and_takeoff(takeoff_alt)
-    home = vehicle.location.global_relative_frame
-    print("Set default/target airspeed to 10")
-    # vehicle.airspeed = 10
-    # obstacle_list = [obstacle1, obstacle2, obstacle3, obstacle4, obstacle5, obstacle6]
-    obstacle_list = [obstacle2, obstacle3, obstacle3, obstacle4, obstacle5, obstacle6]
-    print("Target location: ", "{};{}".format(wp1.lat, wp1.lon))
-    apfa_navigate(home, wp1, 60, *obstacle_list)
-    # apfa_navigate(wp1, home, 60, *obstacle_list)
-    apfa_navigate(wp1, wp2, 60, *obstacle_list)
-    apfa_navigate(wp2, wp3, 60, *obstacle_list)
-    apfa_navigate(wp3, home, 60, *obstacle_list)
-
-    sendVelocity(0, 0, 0)
-    print("LANDING")
-    vehicle.mode = VehicleMode("LAND")
-
-    print("Closing vehicle object")
-    vehicle.close()
-except KeyboardInterrupt:  # In case of a keyboard interrupt, cause the vehicle to go into RTL mode and close the
-    print("KeyboardInterrupt: Returning to Launch")  # vehicle object
-    vehicle.mode = 'RTL'
-
-    print("Closing vehicle object")
-    vehicle.close()
