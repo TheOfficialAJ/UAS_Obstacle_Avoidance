@@ -7,9 +7,10 @@ import math
 from tools import *
 from pymavlink import mavutil
 import numpy as np
+import itertools
 
 
-class DroneNavigate():
+class DroneNavigate:
     """
     This is a class used to navigate a drone using 3D Artificial Potential Field Algorithm (APFA) through a set of
     waypoints avoiding obstacles.
@@ -30,19 +31,22 @@ class DroneNavigate():
         self.connectionString = None
         self.vehicle = None
         self.home = None
-        self.waypoints = None
+        self.waypoints = []
         self.currentWaypoint = None
-        self.obstacles = None
+        self.static_obstacle_locations = []
+        self.dynamic_obstacle_locations = []
         self.neighbours = []
-        self.safety_radius = 20
+        self.safety_radius = 70
+        self.obstacle_radius = 5
+        self.trigger_radius = 100
 
-    def setNeighbours(self, neightbours):
+    def setNeighbours(self, neighbours):
         """
         Sets the neighbours of the UAV, neighbours are other DroneNavigate objects that are in the vicinity of the UAV
-        :param neightbours: A list of DroneNavigate objects
+        :param neighbours: A list of DroneNavigate objects
         :return: None
         """
-        self.neighbours = neightbours
+        self.neighbours = neighbours
 
     def getCurrentLocation(self):
         return self.vehicle.location.global_relative_frame
@@ -66,7 +70,6 @@ class DroneNavigate():
             self.currentWaypoint = wp
             print(wp)
             self._apfa_navigate(self.currentWaypoint)
-        self._apfa_navigate(self.home)
 
     def arm_and_takeoff(self, aTargetAltitude):
         while not self.vehicle.is_armable:
@@ -108,6 +111,7 @@ class DroneNavigate():
         self.vehicle.send_mavlink(msg)
 
     def goto(self, location):
+        self.vehicle.groundspeed = 10
         self.vehicle.simple_goto(location)
 
     def setHome(self, home):
@@ -132,7 +136,7 @@ class DroneNavigate():
         :param obstacles: A list of LocationGlobal or LocationGlobalRelative objects
         :return: None
         """
-        self.obstacles = obstacles
+        self.static_obstacle_locations = obstacles
 
     def _apfa_navigate(self, dest):
         self.K_VELOCITY = self.K_VELOCITY_DEFAULT
@@ -144,8 +148,6 @@ class DroneNavigate():
             # TODO: Updates the current location and the location of dynamic obstacles (other UAVs)
 
             currentLocation = self.vehicle.location.global_relative_frame
-            for neighbour in self.neighbours:
-                neighbour.updateLocation()
 
             dist_2d_dest = get_distance_metres(currentLocation, dest)
             dist_dest = get_3d_distance(currentLocation, dest)
@@ -172,7 +174,7 @@ class DroneNavigate():
                 self.K_VELOCITY = self.K_VELOCITY_DEFAULT
 
             # If we are close to the waypoint, make velocities proportional to the distance (avoid overshoot)
-            reduced_velocity = 1 + dist_dest / 10
+            reduced_velocity = 2 + dist_dest / 10
             if dist_dest < 100 and self.K_VELOCITY > reduced_velocity:
                 self.K_VELOCITY = reduced_velocity
                 print("CLOSE TO DESTINATION")
@@ -204,62 +206,79 @@ class DroneNavigate():
             self.sendVelocity(vx_tot, vy_tot, -vz_tot)
             # time.sleep(0.1)
 
+    def update_dynamic_obstacles(self):
+        for neighbour in self.neighbours:
+            self.dynamic_obstacle_locations = []
+            self.dynamic_obstacle_locations.append(neighbour.getCurrentLocation())
+
     # TODO: Implement smooth braking to slow down drone when approaching obstacle
     # Function to calculate repulsive velocities due to obstacles
     def _get_repulsive_velocities(self, r_wp_vec, trigger_radius):
         velocities = []
-        obstacle_radius = 5
-        for obstacle in self.obstacles:
+        for obstacle in self.static_obstacle_locations:
             # bearing = get_bearing(currentLocation, obstacle)
             # print("Bearing to obstacle:", bearing)
-            currentLocation = self.vehicle.location.global_relative_frame
+            currentLocation = self.getCurrentLocation()
             dist_obs = get_3d_distance(currentLocation, obstacle)
             print("Distance to obstacle:", dist_obs)
-            if dist_obs < obstacle_radius:
-                print("##################-- COLLISION!!! --################", dist_obs, "Index of obstacle:",
-                      self.obstacles.index(obstacle))
+            if dist_obs < self.obstacle_radius:
+                print("##################-- COLLISION!!! --################", dist_obs)
                 self.vehicle.mode = "RTL"
                 self.vehicle.close()
                 sys.exit()
 
-            if dist_obs < trigger_radius:
-                if self.K_VELOCITY > 5:
-                    self.K_VELOCITY = 5
-                bearing = get_bearing(currentLocation, obstacle)
-                dist_obs = get_3d_distance(currentLocation, obstacle)
-                dist_2d = get_distance_metres(currentLocation, obstacle)
-                alt_change = obstacle.alt - currentLocation.alt
-                phi = math.atan2(alt_change, dist_2d)
-                bearing_home_obs = get_bearing(self.currentWaypoint, obstacle)
-                dist_home_obs = get_3d_distance(self.currentWaypoint, obstacle)
-                dist_home_obs_x = dist_home_obs * np.cos(math.radians(bearing_home_obs)) * np.cos(phi)
-                dist_home_obs_y = dist_home_obs * np.sin(math.radians(bearing_home_obs)) + np.cos(phi)
-                ro = np.array([dist_home_obs_x, dist_home_obs_y])
-                # rx = dist_obs * math.cos(np.radians(bearing))
-                # ry = dist_obs * math.sin(np.radians(bearing))
-                # r_obs_vec = np.array([rx, ry])
-                sign = np.sign(np.cross(r_wp_vec, ro))
-                f_rep = -self.K_REP_Y * (
-                        1 / (dist_obs ** 2 - self.safety_radius ** 2) - 1 / (trigger_radius - self.safety_radius) ** 2)
-                fx = f_rep * math.cos(np.radians(bearing)) * np.cos(phi)
-                fy = f_rep * math.sin(np.radians(bearing)) * np.cos(phi)
-                fz = f_rep * np.sin(phi)
-                f_rot_x = -fy
-                f_rot_y = fx
-                print("Sign", sign)
-                if not sign == 0:
-                    f_final_x = fx + sign * f_rot_x  # Creates a rotational vector field in addition to the repulsive field to fix local
-                    f_final_y = fy + sign * f_rot_y  # minima problem. We're adding a vortex vector field to the simple repulsive field
-                else:
-                    f_final_x = fx + f_rot_x
-                    f_final_y = fy + f_rot_y
-                f_final_z = fz
-                # vx = -K_REP_X * (1 / (rx ** 2 - 20 ** 2) - 1 / (safety_radius - 20) ** 2)
-                # vy = -K_REP_Y * (1 / (ry ** 2 - 20 ** 2) - 1 / (safety_radius - 20) ** 2)
+            if dist_obs < self.trigger_radius:
+                # if self.K_VELOCITY > 5:
+                #     self.K_VELOCITY = 5
+                f_final_x, f_final_y, f_final_z = self._calc_repulsive_velocity(currentLocation, obstacle, r_wp_vec)
                 velocities.append((f_final_x, f_final_y, f_final_z))
 
+        self.update_dynamic_obstacles()
+        for obstacle in self.dynamic_obstacle_locations:
+            currentLocation = self.getCurrentLocation()
+            dist_obs = get_3d_distance(currentLocation, obstacle)
+            print("Distance to obstacle:", dist_obs)
+            if dist_obs < self.obstacle_radius:
+                print("##################-- COLLISION!!! --################", dist_obs)
+                self.vehicle.mode = "RTL"
+                self.vehicle.close()
+                sys.exit()
+
+            if dist_obs < self.trigger_radius:
+                # if self.K_VELOCITY > 5:
+                #     self.K_VELOCITY = 5
+                f_final_x, f_final_y, f_final_z = self._calc_repulsive_velocity(currentLocation, obstacle, r_wp_vec)
+                velocities.append((f_final_x, f_final_y, f_final_z))
         return velocities
 
+    def _calc_repulsive_velocity(self, currentLocation, obstacle, r_wp_vec):
+        bearing = get_bearing(currentLocation, obstacle)
+        dist_obs = get_3d_distance(currentLocation, obstacle)
+        dist_2d = get_distance_metres(currentLocation, obstacle)
+        alt_change = obstacle.alt - currentLocation.alt
+        phi = math.atan2(alt_change, dist_2d)
+        bearing_home_obs = get_bearing(self.currentWaypoint, obstacle)
+        dist_home_obs = get_3d_distance(self.currentWaypoint, obstacle)
+        dist_home_obs_x = dist_home_obs * np.cos(math.radians(bearing_home_obs)) * np.cos(phi)
+        dist_home_obs_y = dist_home_obs * np.sin(math.radians(bearing_home_obs)) + np.cos(phi)
+        ro = np.array([dist_home_obs_x, dist_home_obs_y])
+        sign = np.sign(np.cross(r_wp_vec, ro))
+        f_rep = -self.K_REP_Y * (
+                1 / (dist_obs ** 2 - self.safety_radius ** 2) - 1 / (self.trigger_radius - self.safety_radius) ** 2)
+        fx = f_rep * math.cos(np.radians(bearing)) * np.cos(phi)
+        fy = f_rep * math.sin(np.radians(bearing)) * np.cos(phi)
+        fz = f_rep * np.sin(phi)
+        f_rot_x = -fy
+        f_rot_y = fx
+        print("Sign", sign)
+        if not sign == 0:
+            f_final_x = fx + sign * f_rot_x  # Creates a rotational vector field in addition to the repulsive field to fix local
+            f_final_y = fy + sign * f_rot_y  # minima problem. We're adding a vortex vector field to the simple repulsive field
+        else:
+            f_final_x = fx + f_rot_x
+            f_final_y = fy + f_rot_y
+        f_final_z = fz
+        return f_final_x, f_final_y, f_final_z
 # wp1 = get_location_metres(home, 150, 150)
 
 
